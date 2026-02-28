@@ -1,4 +1,4 @@
-﻿export function init(elem) {
+﻿export function init(elem, dotnetRef) {
     elem.focus();
 
     // Auto-resize whenever the user types or if the value is set programmatically
@@ -12,6 +12,68 @@
             elem.dispatchEvent(new CustomEvent('change', { bubbles: true }));
             elem.closest('form').dispatchEvent(new CustomEvent('submit', { bubbles: true, cancelable: true }));
         }
+    });
+
+    const inputBox = elem.closest('.input-box');
+    inputBox.addEventListener('dragenter', (e) => {
+        e.preventDefault();
+        inputBox.classList.add('dragover');
+    });
+    inputBox.addEventListener('dragover', (e) => {
+        e.preventDefault(); // required to allow drop
+        inputBox.classList.add('dragover');
+    });
+    inputBox.addEventListener('dragleave', (e) => {
+        if (!inputBox.contains(e.relatedTarget)) {
+            inputBox.classList.remove('dragover');
+        }
+    });
+    inputBox.addEventListener('drop', async (e) => {
+        e.preventDefault(); // must be first to prevent browser navigating to the dropped file
+        inputBox.classList.remove('dragover');
+        // https://learn.microsoft.com/en-us/aspnet/core/blazor/fundamentals/signalr?view=aspnetcore-10.0#prerendered-state-size-and-signalr-message-size-limit
+        // The default value of MaximumReceiveMessageSize is 32 KB. Increasing the value may increase the risk of Denial of Service (DoS) attacks.
+        const CHUNK_SIZE = 16 * 1024; // 16 KB
+
+        // Create progress overlay
+        const overlay = document.createElement('div');
+        overlay.className = 'upload-progress-overlay';
+        overlay.innerHTML = `
+            <div class="upload-progress-bar-wrap">
+                <div class="upload-progress-bar" style="width:0%"></div>
+            </div>
+            <span class="upload-progress-text">Uploading... 0%</span>
+        `;
+        inputBox.appendChild(overlay);
+        const bar = overlay.querySelector('.upload-progress-bar');
+        const label = overlay.querySelector('.upload-progress-text');
+
+        // Pre-read all files so we know total chunk count for accurate progress
+        const fileInfos = [];
+        let totalAllChunks = 0;
+        for (const f of e.dataTransfer.files) {
+            const buffer = await f.arrayBuffer();
+            const bytes = new Uint8Array(buffer);
+            const totalChunks = Math.max(1, Math.ceil(bytes.byteLength / CHUNK_SIZE));
+            totalAllChunks += totalChunks;
+            fileInfos.push({ f, bytes, totalChunks });
+        }
+
+        let sentChunks = 0;
+        for (const { f, bytes, totalChunks } of fileInfos) {
+            for (let i = 0; i < totalChunks; i++) {
+                const chunk = bytes.subarray(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+                let binary = '';
+                for (let j = 0; j < chunk.byteLength; j++) binary += String.fromCharCode(chunk[j]);
+                await dotnetRef.invokeMethodAsync('AddDroppedFileChunk', f.name, i, totalChunks, btoa(binary));
+                sentChunks++;
+                const pct = Math.round((sentChunks / totalAllChunks) * 100);
+                bar.style.width = pct + '%';
+                label.textContent = `Uploading... ${pct}%`;
+            }
+        }
+
+        overlay.remove();
     });
 }
 

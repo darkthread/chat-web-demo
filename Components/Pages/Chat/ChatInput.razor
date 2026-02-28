@@ -1,7 +1,23 @@
+@using Microsoft.AspNetCore.StaticFiles
+@using System.Diagnostics
 @inject IJSRuntime JS
+@implements IAsyncDisposable
 
 <EditForm Model="@this" OnValidSubmit="@SendMessageAsync">
     <label class="input-box page-width">
+        @if (attachedFiles.Count > 0)
+        {
+            <div class="attachments">
+                @foreach (var file in attachedFiles)
+                {
+                    var captured = file;
+                    <span class="file-chip" title="@captured.Name">
+                        @captured.Name
+                        <button type="button" class="file-chip-remove" @onclick="@(() => attachedFiles.Remove(captured))">&#x2715;</button>
+                    </span>
+                }
+            </div>
+        }
         <textarea @ref="@textArea" @bind="@messageText" placeholder="Type your message..." rows="1"></textarea>
 
         <div class="tools">
@@ -17,6 +33,11 @@
 @code {
     private ElementReference textArea;
     private string? messageText;
+    public record DroppedFile(string Name, byte[] Content);
+
+    private readonly List<DroppedFile> attachedFiles = new();
+    private readonly Dictionary<string, (int Total, List<(int Index, string Data)> Chunks)> _pending = new();
+    private DotNetObjectReference<ChatInput>? dotnetRef;
 
     [Parameter]
     public EventCallback<ChatMessage> OnSend { get; set; }
@@ -24,14 +45,52 @@
     public ValueTask FocusAsync()
         => textArea.FocusAsync();
 
+    [JSInvokable]
+    public void AddDroppedFileChunk(string name, int chunkIndex, int totalChunks, string chunkBase64)
+    {
+        if (!_pending.TryGetValue(name, out var entry))
+        {
+            entry = (totalChunks, new List<(int, string)>());
+            _pending[name] = entry;
+        }
+        entry.Chunks.Add((chunkIndex, chunkBase64));
+        if (entry.Chunks.Count == entry.Total)
+        {
+            var content = entry.Chunks
+                .OrderBy(c => c.Index)
+                .SelectMany(c => Convert.FromBase64String(c.Data))
+                .ToArray();
+            _pending.Remove(name);
+            attachedFiles.Add(new DroppedFile(name, content));
+            StateHasChanged();
+        }
+    }
+
     private async Task SendMessageAsync()
     {
         if (messageText is { Length: > 0 } text)
         {
             messageText = null;
-            await OnSend.InvokeAsync(new ChatMessage(ChatRole.User, text));
+            var contents = new List<AIContent> { new TextContent(text) };
+            if (attachedFiles.Count > 0)
+            {
+                contents.AddRange(attachedFiles.Select(f =>
+                {
+                    var mediaType = GetMediaType(f.Name);
+                    var data = new DataContent(f.Content, mediaType);
+                    data.AdditionalProperties = new() { ["name"] = (object?)f.Name };
+                    return (AIContent)data;
+                }));
+                attachedFiles.Clear();
+            }
+            await OnSend.InvokeAsync(new ChatMessage(ChatRole.User, contents));
         }
     }
+
+    private static string GetMediaType(string fileName) =>
+        new FileExtensionContentTypeProvider().TryGetContentType(fileName, out var contentType)
+            ? contentType
+            : "application/octet-stream";
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -40,12 +99,19 @@
             try
             {
                 var module = await JS.InvokeAsync<IJSObjectReference>("import", "./Components/Pages/Chat/ChatInput.razor.js");
-                await module.InvokeVoidAsync("init", textArea);
+                dotnetRef = DotNetObjectReference.Create(this);
+                await module.InvokeVoidAsync("init", textArea, dotnetRef);
                 await module.DisposeAsync();
             }
             catch (JSDisconnectedException)
             {
             }
         }
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        dotnetRef?.Dispose();
+        return ValueTask.CompletedTask;
     }
 }
