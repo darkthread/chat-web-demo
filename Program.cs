@@ -6,6 +6,8 @@ using chat_web_demo.Components;
 using chat_web_demo.Services;
 using chat_web_demo.Services.Ingestion;
 using System.ClientModel;
+using chat_web_demo;
+using Azure.AI.OpenAI;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddRazorComponents().AddInteractiveServerComponents();
@@ -22,6 +24,10 @@ var azureOpenAi = new OpenAIClient(
     new OpenAIClientOptions { Endpoint = azureOpenAIEndpoint });
 
 var chatClient = azureOpenAi.GetResponsesClient("gpt-5.2-chat").AsIChatClient();
+var azureChatClient = new AzureOpenAIClient(
+    new Uri(builder.Configuration["AzureOpenAI:Endpoint"]!),
+    new ApiKeyCredential(azureOpenAIKey)
+    ).GetChatClient("gpt-5.2-chat");
 #pragma warning restore OPENAI001
 
 var embeddingGenerator = azureOpenAi.GetEmbeddingClient("text-embedding-3-small").AsIEmbeddingGenerator();
@@ -33,6 +39,8 @@ builder.Services.AddSqliteCollection<string, IngestedChunk>(IngestedChunk.Collec
 
 builder.Services.AddSingleton<DataIngestor>();
 builder.Services.AddSingleton<SemanticSearch>();
+builder.Services.AddSingleton<PickNumberFunctions>();
+builder.Services.AddSingleton<PickDayAgent>(new PickDayAgent(azureChatClient));
 builder.Services.AddKeyedSingleton("ingestion_directory", new DirectoryInfo(Path.Combine(builder.Environment.WebRootPath, "Data")));
 builder.Services.AddChatClient(chatClient).UseFunctionInvocation().UseLogging();
 builder.Services.AddEmbeddingGenerator(embeddingGenerator);

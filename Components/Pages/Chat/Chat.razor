@@ -3,6 +3,8 @@
 @inject IChatClient ChatClient
 @inject NavigationManager Nav
 @inject SemanticSearch Search
+@inject PickNumberFunctions PickNumberFunctions
+@inject PickDayAgent PickDayAgent
 @implements IDisposable
 
 <PageTitle>Chat</PageTitle>
@@ -29,6 +31,7 @@
 @code {
     private const string SystemPrompt = @"
         You are an helpful assistant who answers questions of user.
+        Don't use any emojis in your answer. If you don't know the answer, say you don't know. If the question is not clear, ask for clarification.
         ";
 
     private int statefulMessageCount;
@@ -45,7 +48,9 @@
         messages.Add(new(ChatRole.System, SystemPrompt));
         chatOptions.Tools = [
             AIFunctionFactory.Create(LoadDocumentsAsync),
-            AIFunctionFactory.Create(SearchAsync)
+            AIFunctionFactory.Create(SearchAsync),
+            AIFunctionFactory.Create(PickNumberFunctions.PickLotteryNumbersAsync),
+            AIFunctionFactory.Create(PickDayAgent.PickDayAsync)
         ];
     }
 
